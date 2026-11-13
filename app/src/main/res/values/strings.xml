@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Found</string>
+    <string name="tagline">Realtime lyrics, floating above everything else.</string>
+
+    <string name="permissions_header">Permissions</string>
+    <string name="grant_overlay">Allow the floating bubble</string>
+    <string name="grant_media_access">Allow notification access (reads the playing track)</string>
+    <string name="grant_notifications">Allow notifications</string>
+
+    <string name="bubble_header">Bubble</string>
+    <string name="enable_overlay">Show the lyric bubble</string>
+    <string name="show_in_notification">Also show lyrics in the notification shade</string>
+    <string name="auto_collapse">Collapse into a pill when playback pauses</string>
+    <string name="text_scale_value">Text size: %1$.2f×</string>
+
+    <string name="status_template">Overlay permission: %1$s\nMedia access: %2$s</string>
+</resources>
