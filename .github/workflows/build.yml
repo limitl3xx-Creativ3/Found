@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+# One build at a time: two pushes at once would race for the "latest" tag.
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,14 +33,24 @@ jobs:
           gradle-version: '8.7'
 
       - name: Unit tests
-        run: gradle :app:testDebugUnitTest --no-daemon
+        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
 
+      # Lint reports problems, it does not stop the build: the APK is still
+      # worth publishing, but the report is kept as an artifact.
       - name: Lint
-        run: gradle :app:lintDebug --no-daemon
+        run: gradle :app:lintDebug --no-daemon --stacktrace
         continue-on-error: true
 
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+
       - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk Found.apk

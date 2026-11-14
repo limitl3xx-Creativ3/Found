@@ -10,6 +10,8 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.found.lyrics.R
+import dev.found.lyrics.lyrics.LyricWord
 import dev.found.lyrics.util.AccentExtractor
 
 /**
@@ -28,7 +30,6 @@ class BubbleView(context: Context) : FrameLayout(context) {
     private val nextLine: KaraokeTextView
     private val column: LinearLayout
 
-    private var accent: Int = AccentExtractor.FALLBACK
     private var expanded = true
 
     init {
@@ -41,7 +42,7 @@ class BubbleView(context: Context) : FrameLayout(context) {
         artwork = ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setImageDrawable(null)
-            contentDescription = "Album art"
+            contentDescription = context.getString(R.string.album_art)
         }
         addView(
             artwork,
@@ -59,7 +60,10 @@ class BubbleView(context: Context) : FrameLayout(context) {
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
 
-        currentLine = KaraokeTextView(context)
+        currentLine = KaraokeTextView(context).apply {
+            // New lyrics are announced politely as they come in.
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
         nextLine = KaraokeTextView(context).apply {
             baseColor = Color.parseColor("#80FFFFFF")
         }
@@ -88,7 +92,6 @@ class BubbleView(context: Context) : FrameLayout(context) {
 
     /** Applies the accent colour taken from the cover art. */
     fun setAccent(color: Int) {
-        accent = color
         currentLine.accentColor = color
         background.setColor(AccentExtractor.blend(color, Color.parseColor("#12121A"), 0.22f))
         background.setStroke(dp(1), AccentExtractor.blend(color, Color.parseColor("#12121A"), 0.45f))
@@ -119,8 +122,13 @@ class BubbleView(context: Context) : FrameLayout(context) {
     }
 
     /** Word timings for the current line, when the source has them. */
-    fun setWords(words: List<dev.found.lyrics.lyrics.LyricWord>) {
+    fun setWords(words: List<LyricWord>) {
         currentLine.setWords(words)
+    }
+
+    /** Moves the sweep inside the word that is being sung. */
+    fun setWordProgress(index: Int, fraction: Float) {
+        currentLine.setWordProgress(index, fraction)
     }
 
     /** Sets the maximum width the lyric lines may take. */
@@ -137,7 +145,8 @@ class BubbleView(context: Context) : FrameLayout(context) {
     }
 
     /** Switches between the expanded card and the collapsed pill. */
-    fun setExpanded(value: Boolean) {        if (expanded == value) return
+    fun setExpanded(value: Boolean) {
+        if (expanded == value) return
         expanded = value
         column.visibility = if (value) View.VISIBLE else View.GONE
         background.cornerRadius = 1000f

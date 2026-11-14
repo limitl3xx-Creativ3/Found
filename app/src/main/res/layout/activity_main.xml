@@ -89,6 +89,12 @@
             android:layout_height="wrap_content"
             android:text="@string/auto_collapse" />
 
+        <Switch
+            android:id="@+id/switch_top_left"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/top_left_corner" />
+
         <TextView
             android:id="@+id/label_text_scale"
             android:layout_width="match_parent"

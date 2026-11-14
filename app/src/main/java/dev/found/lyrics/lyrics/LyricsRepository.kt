@@ -39,11 +39,11 @@ class LyricsRepository(context: Context) {
 
             cache.read(key)?.let { cached ->
                 val lines = cached.syncedLyrics?.let { LrcParser.parse(it) } ?: emptyList()
-                if (lines.isNotEmpty() || !cached.plainLyrics.isNullOrEmpty()) {
+                if (lines.isNotEmpty() || !cached.plainLyrics.isNullOrEmpty() || cached.instrumental) {
                     return@withContext Lyrics(
                         lines = lines,
                         plainText = cached.plainLyrics,
-                        instrumental = false,
+                        instrumental = cached.instrumental,
                         source = "cache",
                     )
                 }
@@ -60,6 +60,7 @@ class LyricsRepository(context: Context) {
                     syncedLyrics = remote.synced,
                     plainLyrics = remote.plain,
                     fetchedAt = System.currentTimeMillis(),
+                    instrumental = remote.instrumental,
                 )
             )
 
@@ -128,8 +129,13 @@ class LyricsRepository(context: Context) {
             val item = JSONObject(body)
             val synced = item.optString("syncedLyrics").takeIf { it.isNotEmpty() }
             val plain = item.optString("plainLyrics").takeIf { it.isNotEmpty() }
-            if (synced == null && plain == null) return null
-            Remote(synced, plain, item.optBoolean("instrumental", false))
+            val instrumental = item.optBoolean("instrumental", false)
+            if (synced == null && plain == null) {
+                // A track flagged as instrumental has no lyrics, but it is still
+                // a result worth keeping.
+                return if (instrumental) Remote(null, null, true) else null
+            }
+            Remote(synced, plain, instrumental)
         } catch (e: Exception) {
             Log.w(TAG, "could not parse lyrics payload: ${e.message}")
             null
@@ -162,7 +168,7 @@ class LyricsRepository(context: Context) {
     }
 
     private fun encode(value: String): String =
-        URLEncoder.encode(value.ifBlank { " " }.trim(), "UTF-8")
+        URLEncoder.encode(value.trim(), "UTF-8")
 
     private companion object {
         const val TAG = "FoundLyrics"

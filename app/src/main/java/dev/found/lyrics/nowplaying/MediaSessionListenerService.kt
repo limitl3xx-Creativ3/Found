@@ -59,19 +59,26 @@ class MediaSessionListenerService : NotificationListenerService() {
         val key = token.toString()
         if (activeKey == key) {
             activeKey = null
-            publishCurrent()
         }
+        // The session is gone: drop the controller so it does not leak.
+        releaseController(key)
+        publishCurrent()
     }
 
     override fun onDestroy() {
-        for ((key, controller) in controllers) {
-            callbacks[key]?.let { runCatching { controller.unregisterCallback(it) } }
+        for (key in controllers.keys.toList()) {
+            releaseController(key)
         }
-        controllers.clear()
-        callbacks.clear()
         activeController = null
         NowPlayingBus.publish(null)
         super.onDestroy()
+    }
+
+    /** Unregisters and releases the controller for [key], if there is one. */
+    private fun releaseController(key: String) {
+        val controller = controllers.remove(key) ?: return
+        callbacks.remove(key)?.let { runCatching { controller.unregisterCallback(it) } }
+        runCatching { controller.release() }
     }
 
     private inner class Callback : MediaController.Callback() {
@@ -98,16 +105,28 @@ class MediaSessionListenerService : NotificationListenerService() {
         }
     }
 
-    /** Picks the controller that is actually playing, falling back to the last known one. */
+    /**
+     * Picks the controller that is actually playing.
+     *
+     * A media notification is posted for all sorts of things, so the most
+     * recently posted one is not necessarily the audio the user is listening
+     * to: a playing session wins, and the last known one is only the fallback.
+     */
     private fun currentController(): MediaController? {
-        activeKey?.let { key -> controllers[key]?.let { return it } }
-        var best: MediaController? = null
+        val preferred = activeKey?.let { key -> controllers[key] }
+        if (preferred != null && preferred.playbackState?.state == PlaybackState.STATE_PLAYING) {
+            return preferred
+        }
+        var playing: MediaController? = null
+        var fallback: MediaController? = null
         for (controller in controllers.values) {
             val state = controller.playbackState
-            if (state != null && state.state == PlaybackState.STATE_PLAYING) return controller
-            if (best == null) best = controller
+            if (state != null && state.state == PlaybackState.STATE_PLAYING) {
+                if (playing == null) playing = controller
+            }
+            if (fallback == null) fallback = controller
         }
-        return best
+        return playing ?: preferred ?: fallback
     }
 
     private fun publishCurrent() {
@@ -120,12 +139,6 @@ class MediaSessionListenerService : NotificationListenerService() {
 
         val playing = state?.state == PlaybackState.STATE_PLAYING
         val speed = state?.playbackSpeed ?: 0f
-        val position = when {
-            state == null -> 0L
-            playing && speed > 0f ->
-                state.position + ((SystemClock.elapsedRealtime() - state.lastPositionUpdateTime) * speed).toLong()
-            else -> state.position
-        }
 
         activeController = controller
         NowPlayingBus.publish(
@@ -136,12 +149,34 @@ class MediaSessionListenerService : NotificationListenerService() {
                 durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
                 artwork = metadata?.artwork,
                 playing = playing,
-                positionMs = position,
+                positionMs = currentPosition(state, playing, speed),
                 positionUpdatedAt = SystemClock.elapsedRealtime(),
                 playbackSpeed = speed,
                 sessionToken = controller.sessionToken,
             )
         )
+    }
+
+    /**
+     * The playback position of [state], extrapolated to now.
+     *
+     * A session only reports its position when it publishes a new state, so the
+     * position has to be carried forward with the playback speed. The update
+     * time is on the `SystemClock.elapsedRealtime()` base, the same one used
+     * here.
+     */
+    private fun currentPosition(state: PlaybackState?, playing: Boolean, speed: Float): Long {
+        if (state == null) return 0L
+        val position = state.position
+        if (position == PlaybackState.PLAYBACK_POSITION_UNKNOWN) return 0L
+        if (!playing || speed <= 0f) return position.coerceAtLeast(0L)
+
+        val updatedAt = state.lastPositionUpdateTime
+        if (updatedAt <= 0L) return position.coerceAtLeast(0L)
+
+        val delta = SystemClock.elapsedRealtime() - updatedAt
+        if (delta <= 0L) return position.coerceAtLeast(0L)
+        return (position + (delta * speed).toLong()).coerceAtLeast(0L)
     }
 
     companion object {

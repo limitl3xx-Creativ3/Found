@@ -16,6 +16,9 @@ import dev.found.lyrics.overlay.LyricOverlayService
 /**
  * The notification side of Found: the same two lyric lines, shown in the shade
  * with transport controls, so the lyrics are there even when the bubble is hidden.
+ *
+ * This is also the notification of the foreground service, so it always exists
+ * while the bubble is on screen.
  */
 object NotificationPublisher {
 
@@ -57,7 +60,9 @@ object NotificationPublisher {
         val body = listOfNotNull(
             currentLine?.takeIf { it.isNotBlank() },
             nextLine?.takeIf { it.isNotBlank() },
-        ).joinToString("\n").ifEmpty { "Waiting for a track…" }
+        ).joinToString("\n").ifEmpty {
+            if (nowPlaying == null) "Waiting for a track…" else "No lyrics for this track"
+        }
 
         val builder = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
@@ -66,6 +71,7 @@ object NotificationPublisher {
             .setStyle(Notification.BigTextStyle().bigText(body))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setColor(Color.parseColor("#FF6B6B"))
@@ -105,8 +111,15 @@ object NotificationPublisher {
         return builder.build()
     }
 
+    /**
+     * The intent behind a transport button.
+     *
+     * It is a foreground service intent: the service may have been killed while
+     * the notification was still on screen, and a plain service intent would
+     * then not be allowed to start it.
+     */
     private fun serviceIntent(context: Context, action: String, requestCode: Int): PendingIntent =
-        PendingIntent.getService(
+        PendingIntent.getForegroundService(
             context,
             requestCode,
             Intent(context, LyricOverlayService::class.java).setAction(action),

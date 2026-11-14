@@ -18,14 +18,19 @@ import dev.found.lyrics.lyrics.LyricWord
  * colour and the part that has been sung is painted again in the accent colour
  * through a clip rectangle.
  *
- * When the source provides word-level timings the accent is clipped at the end
- * of the word currently being sung, which reads as word-by-word karaoke.
+ * When the source provides word-level timings the accent is clipped inside the
+ * word currently being sung, which reads as word-by-word karaoke. Without them
+ * the accent sweeps the line in step with the time.
  */
 class KaraokeTextView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0,
 ) : View(context, attrs, defStyleAttr) {
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
 
     private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 34f
@@ -34,7 +39,15 @@ class KaraokeTextView @JvmOverloads constructor(
 
     private var layout: StaticLayout? = null
     private var content: CharSequence = ""
-    private var wordEnds: List<Int> = emptyList()
+
+    /** Character range of every word of the current line, in the same order as [words]. */
+    private var wordRanges: List<IntRange> = emptyList()
+
+    /** Index of the word being sung, or -1 when the line is not word synced. */
+    private var wordIndex = -1
+
+    /** How far through the current word the audio is, 0 - 1. */
+    private var wordProgress = 0f
 
     /** Colour of the text that has not been sung yet. */
     var baseColor: Int = Color.WHITE
@@ -59,14 +72,21 @@ class KaraokeTextView @JvmOverloads constructor(
 
     /** Sets the text and lays it out for the available width. */
     fun setContent(value: CharSequence) {
+        if (content == value) return
         content = value
         layout = null
+        wordRanges = emptyList()
+        wordIndex = -1
+        // The text is painted by hand, so a screen reader would otherwise have
+        // nothing to read: hand it the line as its description.
+        contentDescription = value
         requestLayout()
         invalidate()
     }
 
     /** Changes the text size and re-lays out the line. */
     fun setTextSizePx(size: Float) {
+        if (paint.textSize == size) return
         paint.textSize = size
         layout = null
         requestLayout()
@@ -75,25 +95,41 @@ class KaraokeTextView @JvmOverloads constructor(
 
     /** Word timings for this line; empty when the source has none. */
     fun setWords(words: List<LyricWord>) {
-        wordEnds = if (words.isEmpty()) emptyList() else buildWordEnds(words)
+        wordRanges = locateWords(words)
+        wordIndex = -1
+        wordProgress = 0f
         invalidate()
     }
 
-    /** Character offsets where each word ends, so the clip can follow the words. */
-    private fun buildWordEnds(words: List<LyricWord>): List<Int> {
+    /**
+     * Moves the sweep to [index] of the word list and [fraction] through that
+     * word. An index below zero falls back to the time based [progress].
+     */
+    fun setWordProgress(index: Int, fraction: Float) {
+        wordIndex = index
+        wordProgress = fraction.coerceIn(0f, 1f)
+        invalidate()
+    }
+
+    /**
+     * Finds where each word sits in the current text.
+     *
+     * Words that cannot be found (the source normalised them differently) give
+     * up the word sweep, so the line falls back to the time based one instead
+     * of highlighting the wrong words.
+     */
+    private fun locateWords(words: List<LyricWord>): List<IntRange> {
+        if (words.isEmpty()) return emptyList()
         val text = content.toString()
-        val ends = mutableListOf<Int>()
+        val ranges = mutableListOf<IntRange>()
         var cursor = 0
         for (word in words) {
             val index = text.indexOf(word.text, cursor)
-            if (index < 0) {
-                ends.add(text.length)
-                continue
-            }
+            if (index < 0) return emptyList()
             cursor = index + word.text.length
-            ends.add(cursor)
+            ranges.add(index until cursor)
         }
-        return ends
+        return ranges
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -131,15 +167,25 @@ class KaraokeTextView @JvmOverloads constructor(
         canvas.restore()
     }
 
-    /** Where the accent should stop: at the sung word, or at the sweep position. */
+    /** Where the accent should stop: inside the sung word, or at the sweep position. */
     private fun accentClipWidth(textLayout: StaticLayout): Float {
-        if (wordEnds.isNotEmpty() && textLayout.lineCount == 1) {
-            val sung = (progress * wordEnds.size).toInt().coerceIn(0, wordEnds.size)
-            val end = if (sung == 0) 0 else wordEnds[sung - 1]
-            if (end <= 0) return 0f
-            return paint.measureText(content.subSequence(0, end).toString())
+        val range = wordRanges.getOrNull(wordIndex)
+        if (range != null && textLayout.lineCount == 1) {
+            val text = content.toString()
+            val prefix = paint.measureText(text.substring(0, range.first))
+            val word = paint.measureText(text.substring(range.first, range.last + 1))
+            return prefix + word * wordProgress
         }
-        return textLayout.width * progress
+        return textWidth(textLayout) * progress
+    }
+
+    /** The width the text actually occupies, which can be narrower than the layout. */
+    private fun textWidth(textLayout: StaticLayout): Float {
+        var width = 0f
+        for (line in 0 until textLayout.lineCount) {
+            width = maxOf(width, textLayout.getLineWidth(line))
+        }
+        return width
     }
 
     private fun layoutFor(width: Int): StaticLayout {

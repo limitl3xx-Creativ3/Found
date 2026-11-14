@@ -4,16 +4,19 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.core.app.NotificationManagerCompat
 import dev.found.lyrics.FoundSettings
-import dev.found.lyrics.lyrics.LrcParser
+import dev.found.lyrics.R
+import dev.found.lyrics.lyrics.KaraokeSweep
 import dev.found.lyrics.lyrics.Lyrics
 import dev.found.lyrics.lyrics.LyricsRepository
 import dev.found.lyrics.notify.NotificationPublisher
@@ -54,6 +57,13 @@ class LyricOverlayService : Service() {
     private var manualCollapsed: Boolean? = null
     private var lastNotificationUpdate = 0L
 
+    /** Identifies the line currently on screen, so it is only rebuilt on a change. */
+    private var renderedLineKey: String? = null
+
+    /** The artwork the cached accent was taken from. */
+    private var accentSource: Any? = null
+    private var accentValue: Int = AccentExtractor.FALLBACK
+
     override fun onCreate() {
         super.onCreate()
         settings = FoundSettings(this)
@@ -61,7 +71,10 @@ class LyricOverlayService : Service() {
         NotificationPublisher.ensureChannel(this)
 
         // The foreground notification has to exist before anything else can block.
-        startForegroundCompat()
+        if (!startForegroundCompat()) {
+            stopSelf()
+            return
+        }
 
         if (!Settings.canDrawOverlays(this)) {
             Log.w(TAG, "overlay permission missing, stopping")
@@ -90,9 +103,7 @@ class LyricOverlayService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
-        bubble?.let { runCatching { windowManager.removeView(it) } }
-        bubble = null
-        layoutParams = null
+        removeBubble()
         super.onDestroy()
     }
 
@@ -111,14 +122,11 @@ class LyricOverlayService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = if (settings.corner == 0) {
-                Gravity.TOP or Gravity.END
-            } else {
-                Gravity.TOP or Gravity.START
-            }
+            gravity = cornerGravity()
             x = dp(12)
             y = dp(56)
         }
@@ -133,6 +141,17 @@ class LyricOverlayService : Service() {
         }
     }
 
+    private fun removeBubble() {
+        val view = bubble ?: return
+        bubble = null
+        layoutParams = null
+        runCatching { windowManager.removeView(view) }
+            .onFailure { Log.w(TAG, "could not remove overlay view: ${it.message}") }
+    }
+
+    private fun cornerGravity(): Int =
+        if (settings.corner == 0) Gravity.TOP or Gravity.END else Gravity.TOP or Gravity.START
+
     private fun toggleCollapsed() {
         manualCollapsed = !(bubble?.isExpanded() ?: false)
         applyCollapsedState()
@@ -140,8 +159,50 @@ class LyricOverlayService : Service() {
 
     private fun applyCollapsedState() {
         val view = bubble ?: return
-        val collapsed = manualCollapsed ?: !(nowPlaying?.playing ?: false)
+        val collapsed = when {
+            manualCollapsed != null -> manualCollapsed == true
+            settings.autoCollapse -> !(nowPlaying?.playing ?: false)
+            else -> false
+        }
         view.setExpanded(!collapsed)
+    }
+
+    /**
+     * Makes sure the bubble is still on screen.
+     *
+     * The user can revoke the overlay permission while the service runs, and
+     * the system drops the window on its own when that happens, so both cases
+     * are checked here.
+     */
+    private fun ensureOverlayAlive() {
+        if (!Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "overlay permission was revoked, stopping")
+            removeBubble()
+            stopSelf()
+            return
+        }
+        val view = bubble
+        when {
+            view == null -> showBubble()
+            !view.isAttachedToWindow -> {
+                Log.i(TAG, "overlay window was dropped, adding it again")
+                removeBubble()
+                showBubble()
+            }
+        }
+    }
+
+    /** Applies the settings that can change while the service runs. */
+    private fun applyLiveSettings() {
+        val view = bubble ?: return
+        view.setTextScale(settings.textScale)
+        val params = layoutParams ?: return
+        val gravity = cornerGravity()
+        if (params.gravity != gravity) {
+            params.gravity = gravity
+            runCatching { windowManager.updateViewLayout(view, params) }
+                .onFailure { Log.w(TAG, "could not move overlay view: ${it.message}") }
+        }
     }
 
     // --------------------------------------------------------------- playback
@@ -153,8 +214,10 @@ class LyricOverlayService : Service() {
         if (value == null) {
             lyrics = null
             lastTrackKey = null
+            renderedLineKey = null
             view.setTitle(null)
             view.setLyrics(null, null)
+            view.setWords(emptyList())
             view.setArtwork(null)
             applyCollapsedState()
             updateNotification(force = true)
@@ -167,18 +230,28 @@ class LyricOverlayService : Service() {
         val accent = if (settings.accentOverride != 0) {
             settings.accentOverride
         } else {
-            AccentExtractor.from(value.artwork)
+            accentFor(value.artwork)
         }
         view.setAccent(accent)
 
         val key = "${value.artist}|${value.title}|${value.durationMs}"
         if (key != lastTrackKey) {
             lastTrackKey = key
+            renderedLineKey = null
             lyrics = null
             view.setLyrics(null, null)
+            view.setWords(emptyList())
             loadLyrics(value)
         }
         applyCollapsedState()
+    }
+
+    /** The accent colour of the artwork, worked out only when the art changes. */
+    private fun accentFor(artwork: Bitmap?): Int {
+        if (artwork != null && artwork === accentSource) return accentValue
+        accentSource = artwork
+        accentValue = AccentExtractor.from(artwork)
+        return accentValue
     }
 
     private fun loadLyrics(track: NowPlaying) {
@@ -199,6 +272,7 @@ class LyricOverlayService : Service() {
     // ----------------------------------------------------------------- ticker
 
     private suspend fun ticker() {
+        var lastCheck = 0L
         while (scope.isActive) {
             val latest = NowPlayingBus.state.value
             if (latest !== nowPlaying) {
@@ -210,52 +284,80 @@ class LyricOverlayService : Service() {
                 updateLyrics(position)
                 updateNotification(force = false)
             }
-            delay(33)
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastCheck >= CHECK_INTERVAL_MS) {
+                lastCheck = now
+                ensureOverlayAlive()
+                applyLiveSettings()
+            }
+            delay(TICK_MS)
         }
     }
 
     private fun updateLyrics(positionMs: Long) {
         val view = bubble ?: return
         val current = lyrics ?: return
-        if (!current.hasSynced) {
-            val first = current.plainText?.lineSequence()?.firstOrNull { it.isNotBlank() }
-            view.setLyrics(first, null)
-            return
-        }
-        val index = LrcParser.indexAt(current.lines, positionMs)
-        if (index < 0) {
-            view.setLyrics(null, null)
-            return
-        }
-        val line = current.lines[index]
-        val next = current.lines.getOrNull(index + 1)
-        val end = next?.timeMs ?: (line.timeMs + 4_000L)
-        val span = (end - line.timeMs).coerceAtLeast(1L)
-        val progress = ((positionMs - line.timeMs).toFloat() / span.toFloat()).coerceIn(0f, 1f)
 
-        view.setLyrics(line.text, next?.text)
-        view.setWords(line.words)
-        view.setProgress(progress)
+        if (!current.hasSynced) {
+            val text = when {
+                current.instrumental -> getString(R.string.instrumental)
+                else -> current.plainText?.lineSequence()?.firstOrNull { it.isNotBlank() }
+            }
+            if (renderedLineKey != "plain") {
+                renderedLineKey = "plain"
+                view.setLyrics(text, null)
+                view.setWords(emptyList())
+            }
+            return
+        }
+
+        val sweep = KaraokeSweep.at(current.lines, positionMs)
+        if (sweep == null) {
+            // Before the first line there is nothing to show.
+            if (renderedLineKey != null) {
+                renderedLineKey = null
+                view.setLyrics(null, null)
+                view.setWords(emptyList())
+            }
+            return
+        }
+
+        val lineKey = "${sweep.line.timeMs}|${sweep.line.text}"
+        if (lineKey != renderedLineKey) {
+            renderedLineKey = lineKey
+            view.setLyrics(sweep.line.text, sweep.next?.text)
+            view.setWords(sweep.line.words)
+        }
+        view.setProgress(sweep.progress)
+        view.setWordProgress(sweep.wordIndex, sweep.wordProgress)
     }
 
+    /**
+     * Rebuilds the foreground notification.
+     *
+     * The foreground notification cannot be hidden, so the "show the lyrics in
+     * the shade" setting only decides whether the lyric lines are part of it.
+     */
     private fun updateNotification(force: Boolean) {
-        if (!settings.showNotification) return
         val now = System.currentTimeMillis()
-        if (!force && now - lastNotificationUpdate < 500L) return
+        if (!force && now - lastNotificationUpdate < NOTIFICATION_INTERVAL_MS) return
         lastNotificationUpdate = now
 
+        val showLyrics = settings.showNotification
         val current = lyrics
         val position = nowPlaying?.livePosition() ?: 0L
         var line: String? = null
         var next: String? = null
-        if (current != null && current.hasSynced) {
-            val index = LrcParser.indexAt(current.lines, position)
-            if (index >= 0) {
-                line = current.lines[index].text
-                next = current.lines.getOrNull(index + 1)?.text
+        if (showLyrics && current != null) {
+            if (current.hasSynced) {
+                val sweep = KaraokeSweep.at(current.lines, position)
+                if (sweep != null) {
+                    line = sweep.line.text
+                    next = sweep.next?.text
+                }
+            } else {
+                line = current.plainText?.lineSequence()?.firstOrNull { it.isNotBlank() }
             }
-        } else if (current != null) {
-            line = current.plainText?.lineSequence()?.firstOrNull { it.isNotBlank() }
         }
 
         val notification = NotificationPublisher.build(
@@ -282,16 +384,26 @@ class LyricOverlayService : Service() {
         }
     }
 
-    private fun startForegroundCompat() {
+    /**
+     * Puts the service in the foreground. Returns false when the system
+     * refused, in which case the service has to stop.
+     */
+    private fun startForegroundCompat(): Boolean {
         val notification = NotificationPublisher.build(this, null, null, null, false)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NotificationPublisher.NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
-        } else {
-            startForeground(NotificationPublisher.NOTIFICATION_ID, notification)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NotificationPublisher.NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                startForeground(NotificationPublisher.NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "could not start in the foreground: ${e.message}")
+            false
         }
     }
 
@@ -301,9 +413,19 @@ class LyricOverlayService : Service() {
     companion object {
         private const val TAG = "FoundOverlay"
 
+        /** How often the bubble is redrawn, in milliseconds. */
+        private const val TICK_MS = 33L
+
+        /** How often the overlay permission and the live settings are checked. */
+        private const val CHECK_INTERVAL_MS = 1_000L
+
+        /** How often the notification is rebuilt. */
+        private const val NOTIFICATION_INTERVAL_MS = 500L
+
         fun start(context: Context) {
             val intent = Intent(context, LyricOverlayService::class.java)
             runCatching { context.startForegroundService(intent) }
+                .onFailure { Log.e(TAG, "could not start the overlay service: ${it.message}") }
         }
 
         fun stop(context: Context) {

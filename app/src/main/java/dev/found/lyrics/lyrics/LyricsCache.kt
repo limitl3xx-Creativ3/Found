@@ -14,6 +14,8 @@ data class CachedLyrics(
     val syncedLyrics: String?,
     val plainLyrics: String?,
     val fetchedAt: Long,
+    /** The track has no lyrics at all, it is an instrumental. */
+    val instrumental: Boolean = false,
 )
 
 /**
@@ -24,11 +26,23 @@ class LyricsCache(context: Context) {
 
     private val directory: File = File(context.filesDir, "lyrics").apply { mkdirs() }
 
+    /**
+     * The cache key of a track.
+     *
+     * The same track has to land on the same key every time, so the parts are
+     * normalised (trimmed, collapsed whitespace, lower case) before they are
+     * hashed.
+     */
     fun key(artist: String, title: String, durationSec: Int): String {
-        val raw = "$artist|$title|$durationSec".lowercase()
+        val raw = listOf(artist, title, durationSec.toString())
+            .joinToString("|") { normalise(it) }
         val digest = MessageDigest.getInstance("SHA-1").digest(raw.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
+        return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
+
+    /** Trims, collapses whitespace and lower cases, so the key is stable. */
+    private fun normalise(value: String): String =
+        value.trim().replace(Regex("\\s+"), " ").lowercase()
 
     fun read(key: String): CachedLyrics? {
         val file = File(directory, "$key.json")
@@ -39,9 +53,10 @@ class LyricsCache(context: Context) {
                 artist = json.optString("artist"),
                 title = json.optString("title"),
                 durationSec = json.optInt("durationSec"),
-                syncedLyrics = json.optString("syncedLyrics").takeIf { it.isNotEmpty() },
-                plainLyrics = json.optString("plainLyrics").takeIf { it.isNotEmpty() },
+                syncedLyrics = json.optStringOrNull("syncedLyrics"),
+                plainLyrics = json.optStringOrNull("plainLyrics"),
                 fetchedAt = json.optLong("fetchedAt"),
+                instrumental = json.optBoolean("instrumental", false),
             )
         } catch (e: Exception) {
             Log.w(TAG, "dropping unreadable cache entry: ${e.message}")
@@ -56,9 +71,10 @@ class LyricsCache(context: Context) {
                 .put("artist", lyrics.artist)
                 .put("title", lyrics.title)
                 .put("durationSec", lyrics.durationSec)
-                .put("syncedLyrics", lyrics.syncedLyrics ?: JSONObject.NULL)
-                .put("plainLyrics", lyrics.plainLyrics ?: JSONObject.NULL)
+                .put("syncedLyrics", lyrics.syncedLyrics ?: "")
+                .put("plainLyrics", lyrics.plainLyrics ?: "")
                 .put("fetchedAt", lyrics.fetchedAt)
+                .put("instrumental", lyrics.instrumental)
             // Write to a temp file first so a crash cannot corrupt the entry.
             val temp = File(directory, "$key.json.tmp")
             temp.writeText(json.toString())
@@ -70,6 +86,17 @@ class LyricsCache(context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "could not cache lyrics: ${e.message}")
         }
+    }
+
+    /**
+     * Reads a string that may be missing.
+     *
+     * `JSONObject.optString` turns a JSON null into the text "null", so the
+     * null has to be checked before the value is read.
+     */
+    private fun JSONObject.optStringOrNull(name: String): String? {
+        if (isNull(name)) return null
+        return optString(name).takeIf { it.isNotEmpty() }
     }
 
     private companion object {

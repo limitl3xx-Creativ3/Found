@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlaySwitch: Switch
     private lateinit var notificationSwitch: Switch
     private lateinit var autoCollapseSwitch: Switch
+    private lateinit var topLeftSwitch: Switch
     private lateinit var textScaleBar: SeekBar
     private lateinit var textScaleLabel: TextView
     private lateinit var statusText: TextView
@@ -37,6 +38,7 @@ class MainActivity : AppCompatActivity() {
         overlaySwitch = findViewById(R.id.switch_overlay)
         notificationSwitch = findViewById(R.id.switch_notification)
         autoCollapseSwitch = findViewById(R.id.switch_auto_collapse)
+        topLeftSwitch = findViewById(R.id.switch_top_left)
         textScaleBar = findViewById(R.id.seek_text_scale)
         textScaleLabel = findViewById(R.id.label_text_scale)
         statusText = findViewById(R.id.text_status)
@@ -55,6 +57,11 @@ class MainActivity : AppCompatActivity() {
         autoCollapseSwitch.isChecked = settings.autoCollapse
         autoCollapseSwitch.setOnCheckedChangeListener { _, checked ->
             settings.autoCollapse = checked
+        }
+
+        topLeftSwitch.isChecked = settings.corner == 1
+        topLeftSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.corner = if (checked) 1 else 0
         }
 
         textScaleBar.progress = ((settings.textScale - 0.75f) * 100f).toInt().coerceIn(0, 75)
@@ -93,10 +100,17 @@ class MainActivity : AppCompatActivity() {
     private fun updateStatus() {
         val overlayOk = Settings.canDrawOverlays(this)
         val mediaOk = MediaSessionListenerService.isEnabled(this)
+        val notificationsOk = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            true
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        }
         statusText.text = getString(
             R.string.status_template,
             if (overlayOk) "granted" else "not granted",
             if (mediaOk) "granted" else "not granted",
+            if (notificationsOk) "granted" else "not granted",
         )
     }
 
