@@ -5,10 +5,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
+import android.net.Uri
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
@@ -58,15 +60,30 @@ class MediaSessionListenerService : NotificationListenerService() {
     /**
      * The album art of the player.
      *
-     * It is read from the media metadata. The key for it is not part of the
-     * public API, so the raw key is used; when the picture is not there, the
-     * bubble falls back to its own colour.
+     * Most players put the picture in the media metadata, either as a bitmap
+     * or as a uri to it. When there is none, the bubble keeps its own colour.
      */
     private fun artworkOf(metadata: MediaMetadata?): Bitmap? {
         if (metadata == null) return null
-        return runCatching {
-            metadata.getBitmap(METADATA_KEY_PICTURE_FALLBACK)
-        }.getOrNull()
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)?.let { return it }
+        metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { return it }
+        for (key in ART_URI_KEYS) {
+            val uri = metadata.getString(key)
+            if (uri.isNullOrEmpty()) continue
+            val bitmap = loadBitmap(Uri.parse(uri))
+            if (bitmap != null) return bitmap
+        }
+        return null
+    }
+
+    /** Reads a picture from a content uri, for example the album art of a file. */
+    private fun loadBitmap(uri: Uri): Bitmap? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read the album art: ${e.message}")
+            null
+        }
     }
 
     /** Keeps a controller for [token] and makes it the one on screen. */
@@ -211,13 +228,11 @@ class MediaSessionListenerService : NotificationListenerService() {
     companion object {
         private const val TAG = "FoundMedia"
 
-        /**
-         * The key the platform stores the album art under.
-         *
-         * `MediaMetadata.METADATA_KEY_PICTURE` is not part of the public SDK,
-         * so the raw key is used instead.
-         */
-        private const val METADATA_KEY_PICTURE_FALLBACK = "android.media.metadata.PICTURE"
+        /** The metadata keys that may point at the album art. */
+        private val ART_URI_KEYS = listOf(
+            MediaMetadata.METADATA_KEY_ART_URI,
+            MediaMetadata.METADATA_KEY_ALBUM_ART_URI,
+        )
 
         /** The controller of whatever is playing, for transport controls. */
         @Volatile

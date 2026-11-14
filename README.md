@@ -49,6 +49,16 @@ search fallback when there is no exact match. The result is cached on disk
 under a key made of artist, title and duration, so the same track is only ever
 looked up once.
 
+## A note on the platform API
+
+Several members that look exactly right for this job — `MediaController.release`,
+`Notification.Builder.setSilent`, `MediaMetadata.getArtwork`,
+`NotificationListenerService.getActiveSessions` — are hidden from the public
+SDK, so they are not in `android.jar` and cannot be called. The code uses the
+documented public API instead: `MediaSessionManager.getActiveSessions` for the
+sessions, `MediaMetadata.METADATA_KEY_ART` for the album art, and a silent
+channel for the notification.
+
 ## Building
 
 The project builds with Gradle. There is no wrapper checked in, so use a
@@ -61,7 +71,12 @@ gradle :app:testDebugUnitTest  # run the unit tests
 
 GitHub Actions builds the APK on every push to `main` and publishes it to the
 `latest` prerelease, which is what the download link on the releases page points
-at.
+at. The unit tests run before the APK is built, so a broken build is never
+published.
+
+When a step fails, the workflow writes the failure output into `diagnostics/`
+in the repository, so the problem can be read without opening the workflow
+logs.
 
 ## Layout
 
