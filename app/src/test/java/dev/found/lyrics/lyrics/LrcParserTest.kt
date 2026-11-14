@@ -44,11 +44,51 @@ class LrcParserTest {
     }
 
     @Test
+    fun theTextBeforeTheFirstWordMarkIsTheFirstWord() {
+        val lines = LrcParser.parse("[00:10.00]Hello <00:10.50>world")
+
+        assertEquals("Hello world", lines[0].text)
+        assertEquals(2, lines[0].words.size)
+        assertEquals("Hello", lines[0].words[0].text)
+        assertEquals(10_000L, lines[0].words[0].timeMs)
+        assertEquals("world", lines[0].words[1].text)
+        assertEquals(10_500L, lines[0].words[1].timeMs)
+    }
+
+    @Test
+    fun aLineWithoutAWordMarkHasNoWords() {
+        val lines = LrcParser.parse("[00:10.00]Hello world")
+
+        assertTrue(lines[0].words.isEmpty())
+        assertEquals("Hello world", lines[0].text)
+        assertTrue(!lines[0].wordSynced)
+    }
+
+    @Test
     fun ignoresMetadataTagsAndBlankLines() {
         val lines = LrcParser.parse("[ti:Paradise]\n\n[00:05.00]real line\n")
 
         assertEquals(1, lines.size)
         assertEquals("real line", lines[0].text)
+    }
+
+    @Test
+    fun sortsTheLinesByTime() {
+        val lines = LrcParser.parse("[00:20.00]third\n[00:10.00]second\n[00:05.00]first")
+
+        assertEquals("first", lines[0].text)
+        assertEquals("second", lines[1].text)
+        assertEquals("third", lines[2].text)
+    }
+
+    @Test
+    fun oneLineCanCarrySeveralTimestamps() {
+        val lines = LrcParser.parse("[00:10.00][01:10.00]chorus")
+
+        assertEquals(2, lines.size)
+        assertEquals(10_000L, lines[0].timeMs)
+        assertEquals(70_000L, lines[1].timeMs)
+        assertEquals("chorus", lines[0].text)
     }
 
     @Test

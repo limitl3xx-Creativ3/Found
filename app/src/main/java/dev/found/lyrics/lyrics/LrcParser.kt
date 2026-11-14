@@ -18,6 +18,10 @@ data class LyricLine(
 
 /**
  * Parser for LRC lyrics, including the enhanced `<mm:ss.xx>` word timings.
+ *
+ * In enhanced LRC a `<mm:ss.xx>` mark sits *before* the word it belongs to,
+ * and the text in front of the first mark belongs to the line itself, so it
+ * starts at the line timestamp.
  */
 object LrcParser {
 
@@ -33,12 +37,15 @@ object LrcParser {
             if (line.isEmpty()) continue
             val stamps = TIME.findAll(line).toList()
             if (stamps.isEmpty()) continue
-            val body = line.substring(stamps.first().range.last + 1)
-            val words = parseWords(body)
-            val text = normalize(if (words.isNotEmpty()) body.replace(WORD, "") else body)
-            if (text.isEmpty() && words.isEmpty()) continue
+            // The text follows the last timestamp. An earlier timestamp on the
+            // same line means the same words are sung again later, so every
+            // stamp gets its own line with the words timed from that stamp.
+            val body = line.substring(stamps.last().range.last + 1)
+            val text = normalize(body.replace(WORD, ""))
+            if (text.isEmpty()) continue
             for (match in stamps) {
-                lines.add(LyricLine(timeMs(match), text, words))
+                val lineTime = timeMs(match)
+                lines.add(LyricLine(lineTime, text, parseWords(body, lineTime)))
             }
         }
         return lines.sortedBy { it.timeMs }
@@ -64,10 +71,23 @@ object LrcParser {
         return result
     }
 
-    private fun parseWords(body: String): List<LyricWord> {
+    /**
+     * Splits the body of a line into words.
+     *
+     * The text in front of the first `<mm:ss.xx>` mark is the first word of the
+     * line, so it is timed from [lineTimeMs]. Every other word is timed from
+     * the mark in front of it.
+     */
+    private fun parseWords(body: String, lineTimeMs: Long): List<LyricWord> {
         val marks = WORD.findAll(body).toList()
         if (marks.isEmpty()) return emptyList()
         val words = mutableListOf<LyricWord>()
+
+        val leading = normalize(body.substring(0, marks[0].range.first))
+        if (leading.isNotEmpty()) {
+            words.add(LyricWord(lineTimeMs, leading))
+        }
+
         for (i in marks.indices) {
             val start = marks[i].range.last + 1
             val end = if (i + 1 < marks.size) marks[i + 1].range.first else body.length
