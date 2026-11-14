@@ -133,8 +133,8 @@ class BubbleView(context: Context) : FrameLayout(context) {
 
     /** Sets the maximum width the lyric lines may take. */
     fun setMaxTextWidth(px: Int) {
-        currentLine.maxWidth = px
-        nextLine.maxWidth = px
+        currentLine.setMaxTextWidth(px)
+        nextLine.setMaxTextWidth(px)
     }
 
     /** Applies the user's text-size preference. */

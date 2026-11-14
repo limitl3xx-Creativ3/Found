@@ -71,7 +71,6 @@ object NotificationPublisher {
             .setStyle(Notification.BigTextStyle().bigText(body))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setSilent(true)
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setColor(Color.parseColor("#FF6B6B"))

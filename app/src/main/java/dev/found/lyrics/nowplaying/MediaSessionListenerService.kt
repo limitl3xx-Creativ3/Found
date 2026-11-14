@@ -1,11 +1,13 @@
 package dev.found.lyrics.nowplaying
 
 import android.app.Notification
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSession
+import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
@@ -33,15 +35,27 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        try {
-            activeSessions?.forEach { onNotificationPosted(it) }
-        } catch (e: SecurityException) {
-            Log.w(TAG, "cannot read active sessions: ${e.message}")
+        // Pick up whatever is already playing. The sessions of the running
+        // players are asked for through the media session manager; without
+        // notification access this throws and is simply ignored.
+        runCatching {
+            val component = ComponentName(this, MediaSessionListenerService::class.java)
+            val manager = getSystemService(MediaSessionManager::class.java)
+            manager?.getActiveSessions(component)?.forEach { session ->
+                onSessionToken(session.sessionToken)
+            }
+        }.onFailure {
+            Log.w(TAG, "cannot read the active sessions: ${it.message}")
         }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val token = extractToken(sbn) ?: return
+        onSessionToken(token)
+    }
+
+    /** Keeps a controller for [token] and makes it the one on screen. */
+    private fun onSessionToken(token: MediaSession.Token) {
         val key = token.toString()
         if (!controllers.containsKey(key)) {
             val controller = runCatching { MediaController(this, token) }.getOrNull() ?: return
@@ -74,11 +88,11 @@ class MediaSessionListenerService : NotificationListenerService() {
         super.onDestroy()
     }
 
-    /** Unregisters and releases the controller for [key], if there is one. */
+    /** Unregisters the controller for [key], if there is one. */
     private fun releaseController(key: String) {
         val controller = controllers.remove(key) ?: return
-        callbacks.remove(key)?.let { runCatching { controller.unregisterCallback(it) } }
-        runCatching { controller.release() }
+        val callback = callbacks.remove(key) ?: return
+        runCatching { controller.unregisterCallback(callback) }
     }
 
     private inner class Callback : MediaController.Callback() {
@@ -147,7 +161,7 @@ class MediaSessionListenerService : NotificationListenerService() {
                 artist = artist,
                 album = metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-                artwork = metadata?.artwork,
+                artwork = metadata?.getBitmap(MediaMetadata.METADATA_KEY_PICTURE),
                 playing = playing,
                 positionMs = currentPosition(state, playing, speed),
                 positionUpdatedAt = SystemClock.elapsedRealtime(),

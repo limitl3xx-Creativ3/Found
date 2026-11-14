@@ -49,6 +49,9 @@ class KaraokeTextView @JvmOverloads constructor(
     /** How far through the current word the audio is, 0 - 1. */
     private var wordProgress = 0f
 
+    /** The widest the text may get, in pixels. 0 means no limit. */
+    private var maxTextWidth = 0
+
     /** Colour of the text that has not been sung yet. */
     var baseColor: Int = Color.WHITE
         set(value) {
@@ -88,6 +91,15 @@ class KaraokeTextView @JvmOverloads constructor(
     fun setTextSizePx(size: Float) {
         if (paint.textSize == size) return
         paint.textSize = size
+        layout = null
+        requestLayout()
+        invalidate()
+    }
+
+    /** Limits how wide the line may get, in pixels. */
+    fun setMaxTextWidth(px: Int) {
+        if (maxTextWidth == px) return
+        maxTextWidth = px
         layout = null
         requestLayout()
         invalidate()
@@ -134,7 +146,7 @@ class KaraokeTextView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val available = MeasureSpec.getSize(widthMeasureSpec)
-        val wrapWidth = if (maxWidth > 0) minOf(available, maxWidth) else available
+        val wrapWidth = if (maxTextWidth > 0) minOf(available, maxTextWidth) else available
         if (wrapWidth <= 0) {
             setMeasuredDimension(available, paddingTop + paddingBottom)
             return
