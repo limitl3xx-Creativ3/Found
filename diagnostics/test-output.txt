@@ -22,8 +22,12 @@ Daemon will be stopped at the end of the build
 > Task :app:preDebugUnitTestBuild UP-TO-DATE
 > Task :app:javaPreCompileDebugUnitTest UP-TO-DATE
 
+> Task :app:compileDebugKotlin
+e: file:///home/runner/work/Found/Found/app/src/main/java/dev/found/lyrics/nowplaying/MediaSessionListenerService.kt:68:16 Cannot infer type for this parameter. Please specify it explicitly.
+e: file:///home/runner/work/Found/Found/app/src/main/java/dev/found/lyrics/nowplaying/MediaSessionListenerService.kt:68:28 Cannot infer type for this parameter. Please specify it explicitly.
+e: file:///home/runner/work/Found/Found/app/src/main/java/dev/found/lyrics/nowplaying/MediaSessionListenerService.kt:68:35 Unresolved reference 'bitmap'.
+
 > Task :app:compileDebugKotlin FAILED
-e: file:///home/runner/work/Found/Found/app/src/main/java/dev/found/lyrics/nowplaying/MediaSessionListenerService.kt:164:61 Unresolved reference 'METADATA_KEY_PICTURE'.
 
 FAILURE: Build failed with an exception.
 
@@ -237,5 +241,5 @@ Caused by: org.jetbrains.kotlin.gradle.tasks.CompilationErrorException: Compilat
 	... 2 more
 
 
-BUILD FAILED in 12s
+BUILD FAILED in 18s
 18 actionable tasks: 1 executed, 17 up-to-date
