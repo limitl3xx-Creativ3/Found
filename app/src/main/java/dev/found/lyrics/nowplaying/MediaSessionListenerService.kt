@@ -4,6 +4,7 @@ import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSession
@@ -31,6 +32,7 @@ class MediaSessionListenerService : NotificationListenerService() {
     private val handler = Handler(Looper.getMainLooper())
     private val controllers = mutableMapOf<String, MediaController>()
     private val callbacks = mutableMapOf<String, MediaController.Callback>()
+    private val artworks = mutableMapOf<String, Bitmap>()
     private var activeKey: String? = null
 
     override fun onListenerConnected() {
@@ -51,11 +53,23 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val token = extractToken(sbn) ?: return
-        onSessionToken(token)
+        onSessionToken(token, artworkOf(sbn))
+    }
+
+    /**
+     * The album art of the player.
+     *
+     * It is taken from the media notification, which is where the player put
+     * it in the first place. The picture inside the media metadata is not
+     * part of the public API, the notification is.
+     */
+    private fun artworkOf(sbn: StatusBarNotification?): Bitmap? {
+        val icon = sbn?.notification?.largeIcon ?: return null
+        return runCatching { icon.bitmap }.getOrNull()
     }
 
     /** Keeps a controller for [token] and makes it the one on screen. */
-    private fun onSessionToken(token: MediaSession.Token) {
+    private fun onSessionToken(token: MediaSession.Token, artwork: Bitmap? = null) {
         val key = token.toString()
         if (!controllers.containsKey(key)) {
             val controller = runCatching { MediaController(this, token) }.getOrNull() ?: return
@@ -64,6 +78,7 @@ class MediaSessionListenerService : NotificationListenerService() {
             callbacks[key] = callback
             controller.registerCallback(callback, handler)
         }
+        if (artwork != null) artworks[key] = artwork
         activeKey = key
         publishCurrent()
     }
@@ -90,6 +105,7 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     /** Unregisters the controller for [key], if there is one. */
     private fun releaseController(key: String) {
+        artworks.remove(key)
         val controller = controllers.remove(key) ?: return
         val callback = callbacks.remove(key) ?: return
         runCatching { controller.unregisterCallback(callback) }
@@ -161,7 +177,7 @@ class MediaSessionListenerService : NotificationListenerService() {
                 artist = artist,
                 album = metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-                artwork = metadata?.getBitmap(MediaMetadata.METADATA_KEY_PICTURE),
+                artwork = activeKey?.let { artworks[it] },
                 playing = playing,
                 positionMs = currentPosition(state, playing, speed),
                 positionUpdatedAt = SystemClock.elapsedRealtime(),
